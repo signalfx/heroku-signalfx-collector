@@ -151,7 +151,7 @@ func collectDatapoints(ll *logLine, appName string) []*datapoint.Datapoint {
 	processType := dynoNumberFormat.ReplaceAllString(ll.ProcId, "")
 	metrics, dims := make([]*metricVal, 0), map[string]string{}
 	appNameDim := map[string]string{
-		"appName": appName,
+		"app_name": appName,
 	}
 
 	// Router logs are special
