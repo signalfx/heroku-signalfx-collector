@@ -3,8 +3,6 @@ package main
 import (
 	"strconv"
 	"strings"
-
-	log "github.com/sirupsen/logrus"
 )
 
 // Returns true if a key/value pair represents a metricVal. Inputs to this method
@@ -56,16 +54,10 @@ func makeSetOfStringsFromArray(metricsToExlcude []string) map[string]bool {
 	return ret
 }
 
-func evaluateBoolEnvVariable(envName string, envKey string, defaultVal bool) bool {
-	val, err := strconv.ParseBool(envKey)
-
-	if err != nil {
-		log.WithFields(log.Fields{
-			"error": err,
-			envName: envKey,
-		}).Error("This environment variable supports only boolean values")
-		return defaultVal
+func evaluateBoolEnvVariable(envKey string, defaultVal bool) (bool, error) {
+	if envKey == "" {
+		return defaultVal, nil
 	}
 
-	return val
+	return strconv.ParseBool(envKey)
 }

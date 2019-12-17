@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/signalfx/golib/v3/datapoint"
@@ -12,19 +14,17 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type signalfxWriter struct {
+type listener struct {
 	client                  *sfxclient.HTTPSink
 	datapointWriter         *sfxwriter.DatapointWriter
 	dps                     chan []*datapoint.Datapoint
 	ingestUrl               string
-	port                    string
+	port                    int64
 	metricsToExclude        map[string]bool
 	dimensionPairsToExclude map[string]string
 }
 
-const IngestUrl = "https://ingest.signalfx.com/v2/datapoint"
-
-func init() {
+func setupListener() (*listener, error) {
 	// Output to stderr instead of stdout
 	log.SetOutput(os.Stderr)
 
@@ -33,48 +33,63 @@ func init() {
 
 	sfxDebug := os.Getenv("SFX_DEBUG")
 	logLevel := "info"
-	if sfxDebug != "" {
-		isDebug := evaluateBoolEnvVariable("SFX_DEBUG", sfxDebug, false)
+	isDebug, err := evaluateBoolEnvVariable(sfxDebug, false)
 
-		if isDebug {
-			log.SetLevel(log.DebugLevel)
-			logLevel = "debug"
-		}
+	if err != nil {
+		log.WithFields(log.Fields{
+			"error":     err,
+			"SFX_DEBUG": sfxDebug,
+		}).Error("This environment variable supports only boolean values")
+	}
+
+	if isDebug {
+		log.SetLevel(log.DebugLevel)
+		logLevel = "debug"
 	}
 
 	log.Infof("Using log level %s", logLevel)
-}
 
-func setupAndStartSignalFxWriter() *signalfxWriter {
-	sw := &signalfxWriter{
+	listnr := &listener{
 		dps:       make(chan []*datapoint.Datapoint, 1),
 		client:    sfxclient.NewHTTPSink(),
-		ingestUrl: IngestUrl,
-		port:      "8080",
+		port:      8000,
 	}
 
-	// Heroku assigns a port dynamically for an app. This port is used only
+	// Heroku assigns a port dynamically for an app. 8000 port is used only
 	// for testing/developing purposes
-	if os.Getenv("PORT") != "" {
-		sw.port = os.Getenv("PORT")
+	portEnv := os.Getenv("PORT")
+	if portEnv != "" {
+		port, err := strconv.ParseInt(portEnv, 10, 64)
+
+		if err != nil {
+			return nil, fmt.Errorf("failed to read value from PORT environment variable: %s", err)
+		}
+
+		listnr.port = port
+
 	}
 
-	if os.Getenv("SFX_TOKEN") != "" {
-		sw.client.AuthToken = os.Getenv("SFX_TOKEN")
+	sfxToken := os.Getenv("SFX_TOKEN")
+	if sfxToken == "" {
+		return nil, fmt.Errorf("SFX_TOKEN environment variable not set")
 	}
+
+	listnr.client.AuthToken = os.Getenv(sfxToken)
 
 	// Prefer SFX_INGEST_URL over SFX_REALM
 	if os.Getenv("SFX_INGEST_URL") != "" {
-		sw.client.DatapointEndpoint = os.Getenv("SFX_INGEST_URL")
+		listnr.client.DatapointEndpoint = os.Getenv("SFX_INGEST_URL")
 	} else if os.Getenv("SFX_REALM") != "" {
-		sw.client.DatapointEndpoint = IngestUrl[0:14] + os.Getenv("SFX_REALM") + IngestUrl[13:]
+		listnr.client.DatapointEndpoint = fmt.Sprintf("https://ingest.%s.signalfx.com/v2/datapoint", os.Getenv("SFX_REALM"))
+	} else {
+		return nil, fmt.Errorf("SFX_INGEST_URL or SFX_REALM should be set")
 	}
 
 	// Looks for comma-separated metricVal names to exclude. Looks values like the following
 	// "metric_name1,metric_name2,metric_name3"
 	if os.Getenv("SFX_METRICS_TO_EXCLUDE") != "" {
 		metricsToExlcude := strings.Split(os.Getenv("SFX_METRICS_TO_EXCLUDE"), ",")
-		sw.metricsToExclude = makeSetOfStringsFromArray(metricsToExlcude)
+		listnr.metricsToExclude = makeSetOfStringsFromArray(metricsToExlcude)
 
 		log.WithFields(log.Fields{
 			"metricVal filter": "Metrics to exclude",
@@ -95,31 +110,39 @@ func setupAndStartSignalFxWriter() *signalfxWriter {
 			"dimension filter": "Dimension key-value pairs to exclude",
 		}).Info(dims)
 
-		sw.dimensionPairsToExclude = dims
+		listnr.dimensionPairsToExclude = dims
 	}
 
-	sw.datapointWriter = &sfxwriter.DatapointWriter{
-		PreprocessFunc: sw.shouldDisptach,
-		SendFunc:       sw.sendDatapoints,
-		InputChan:      sw.dps,
+	listnr.datapointWriter = &sfxwriter.DatapointWriter{
+		PreprocessFunc: listnr.shouldDisptach,
+		SendFunc:       listnr.sendDatapoints,
+		InputChan:      listnr.dps,
 	}
 
 	ctx, _ := context.WithCancel(context.Background())
-	sw.datapointWriter.Start(ctx)
+	listnr.datapointWriter.Start(ctx)
 
-	return sw
+	return listnr, nil
 }
 
 func main() {
-	sw := setupAndStartSignalFxWriter()
-	http.HandleFunc("/", sw.processLogs)
+	listnr, err := setupListener()
+
+	if err != nil {
+		log.WithFields(log.Fields{
+			"error": err,
+		}).Error("Failed to setup listener")
+		return
+	}
+
+	http.HandleFunc("/", listnr.processLogs)
 
 	log.WithFields(log.Fields{
-		"ingestURL": sw.ingestUrl,
-		"port":      sw.port,
+		"ingestURL": listnr.ingestUrl,
+		"port":      listnr.port,
 	}).Info("Starting up SignalFx Collector")
 
-	err := http.ListenAndServe(":"+sw.port, nil)
+	err = http.ListenAndServe(fmt.Sprintf(":%d", listnr.port), nil)
 	if err != nil {
 		log.WithFields(log.Fields{
 			"error": err,

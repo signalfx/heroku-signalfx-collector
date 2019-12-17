@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -75,7 +74,7 @@ var refinedMetricNames = map[string]string{
 	"bytes":   "heroku.router.response.bytes",
 }
 
-func (sw *signalfxWriter) processLogs(w http.ResponseWriter, req *http.Request) {
+func (sw *listener) processLogs(w http.ResponseWriter, req *http.Request) {
 	log.Infoln(req.URL.Query().Encode())
 	appName, err := getAppNameFromParams(req.URL.Query())
 
@@ -111,7 +110,7 @@ func getAppNameFromParams(values url.Values) (string, error) {
 	appName := values["appname"]
 
 	if len(appName) != 1 || appName[0] == "" {
-		return "", errors.New(fmt.Sprintf("appname parameter takes exactly one value. current value: %v", appName))
+		return "", fmt.Errorf(fmt.Sprintf("appname parameter takes exactly one value. current value: %v", appName))
 	}
 	return appName[0], nil
 }
@@ -295,13 +294,13 @@ func evaluateMetric(splitPair []string, isRouterMetric bool) (*metricVal, error)
 		if err != nil {
 			matches := numberFormat.FindAllString(splitPair[1], 1)
 			if len(matches) != 1 {
-				return nil, errors.New("unsupported metricVal like field encounter: [" + splitPair[0] + ", " + splitPair[1] + "]")
+				return nil, fmt.Errorf("unsupported metricVal like field encountered: [" + splitPair[0] + ", " + splitPair[1] + "]")
 			}
 
 			val, err := strconv.ParseFloat(matches[0], 64)
 
 			if err != nil {
-				return nil, errors.New("unsupported metricVal like field encounter: [" + splitPair[0] + ", " + splitPair[1] + "]")
+				return nil, fmt.Errorf("unsupported metricVal like field encountered: [" + splitPair[0] + ", " + splitPair[1] + "]")
 			}
 			return getMetric(splitPair[0], float64(val), isRouterMetric)
 		}

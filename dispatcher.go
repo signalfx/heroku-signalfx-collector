@@ -7,7 +7,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func (sw *signalfxWriter) sendDatapoints(ctx context.Context, dps []*datapoint.Datapoint) error {
+func (sw *listener) sendDatapoints(ctx context.Context, dps []*datapoint.Datapoint) error {
 	err := sw.client.AddDatapoints(ctx, dps)
 	if err != nil {
 		log.WithFields(log.Fields{
@@ -19,7 +19,7 @@ func (sw *signalfxWriter) sendDatapoints(ctx context.Context, dps []*datapoint.D
 	return nil
 }
 
-func (sw *signalfxWriter) shouldDisptach(datapoint *datapoint.Datapoint) bool {
+func (sw *listener) shouldDisptach(datapoint *datapoint.Datapoint) bool {
 	dispatch := true
 	if sw.metricsToExclude[datapoint.Metric] {
 		dispatch = false
