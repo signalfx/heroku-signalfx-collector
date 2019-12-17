@@ -1,0 +1,23 @@
+issues:
+  max-same-issues: 0
+  max-per-linter: 0
+
+linters:
+  enable-all: true
+  disable:
+    # Line length is only a problem if it impedes readability, which should be
+    # determined at code review time.
+    - lll
+    # A lot of config structs have a certain order due to grouping of options
+    # and they are only allocated once so space optimization isn't important.
+    - maligned
+    # This flags things a lot when it is impossible to know how big the backing
+    # array should be.
+    - prealloc
+    # There are many legitimate uses of globals
+    - gochecknoglobals
+    - godox
+
+run:
+  modules-download-mode: readonly
+  timeout: 5m
