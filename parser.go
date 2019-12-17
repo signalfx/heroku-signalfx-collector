@@ -69,9 +69,9 @@ var routerMetricKeys = map[string]bool{
 // In some cases metricVal names derived from the logs don't make a lot of sense.
 // Have an alternative name for such metrics
 var refinedMetricNames = map[string]string{
-	"connect": "heroku.router.request.connectMillis",
-	"service": "heroku.router.request.serviceMillis",
-	"bytes":   "heroku.router.response.bytes",
+	"connect": "heroku.router_request_connect_time_millis",
+	"service": "heroku.router_request_service_time_millis",
+	"bytes":   "heroku.router_response_bytes",
 }
 
 func (sw *listener) processLogs(w http.ResponseWriter, req *http.Request) {
