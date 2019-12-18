@@ -8,12 +8,16 @@ import (
 // Returns true if a key/value pair represents a metricVal. Inputs to this method
 // are always expected to be of the form "key=value"
 func isMetric(key string, metricsToIncludeFromMessage map[string]bool) bool {
-	return metricsToIncludeFromMessage[key] || isGauge(key) || isCounter(key) || isCumulative(key) || isSample(key)
+	return metricsToIncludeFromMessage[key] || isGauge(key) || isCumulative(key) || isCounter(key) || isSample(key)
 }
 
 // Returns true if a key represents a dimension key/value pair needs to be synced
 func isDimension(key string, dimsToIncludeFromMessage map[string]bool) bool {
 	return dimsToIncludeFromMessage[key] || strings.HasPrefix(key, "sfxdimension#")
+}
+
+func isCounter(key string) bool {
+	return strings.HasPrefix(key, "cumulative#")
 }
 
 func isGauge(key string) bool {
@@ -22,10 +26,6 @@ func isGauge(key string) bool {
 
 func isCumulative(key string) bool {
 	return strings.HasPrefix(key, "cumulative#")
-}
-
-func isCounter(key string) bool {
-	return strings.HasPrefix(key, "counter#")
 }
 
 func isSample(key string) bool {

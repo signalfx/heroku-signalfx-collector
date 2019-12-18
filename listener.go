@@ -3,25 +3,25 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/signalfx/golib/v3/errors"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
-	"github.com/signalfx/golib/v3/datapoint"
 	"github.com/signalfx/golib/v3/sfxclient"
-	sfxwriter "github.com/signalfx/signalfx-go/writer"
 	log "github.com/sirupsen/logrus"
 )
 
 type listener struct {
-	client                  *sfxclient.HTTPSink
-	datapointWriter         *sfxwriter.DatapointWriter
-	dps                     chan []*datapoint.Datapoint
-	ingestUrl               string
+	scheduler               *sfxclient.Scheduler
 	port                    int64
 	metricsToExclude        map[string]bool
 	dimensionPairsToExclude map[string]string
+	registry                *metricRegistry
+	ctx                     context.Context
+	cancel                  context.CancelFunc
 }
 
 func setupListener() (*listener, error) {
@@ -31,8 +31,10 @@ func setupListener() (*listener, error) {
 	// Only log the Info severity or above
 	log.SetLevel(log.InfoLevel)
 
-	sfxDebug := os.Getenv("SFX_DEBUG")
+	log.Infoln("Dry run mode on, no datapoints will be emitted to SignalFx")
+
 	logLevel := "info"
+	sfxDebug := os.Getenv("SFX_DEBUG")
 	isDebug, err := evaluateBoolEnvVariable(sfxDebug, false)
 
 	if err != nil {
@@ -50,9 +52,9 @@ func setupListener() (*listener, error) {
 	log.Infof("Using log level %s", logLevel)
 
 	listnr := &listener{
-		dps:       make(chan []*datapoint.Datapoint, 1),
-		client:    sfxclient.NewHTTPSink(),
+		scheduler: sfxclient.NewScheduler(),
 		port:      8000,
+		registry:  newRegistry(),
 	}
 
 	// Heroku assigns a port dynamically for an app. 8000 port is used only
@@ -68,19 +70,18 @@ func setupListener() (*listener, error) {
 		listnr.port = port
 
 	}
-
 	sfxToken := os.Getenv("SFX_TOKEN")
 	if sfxToken == "" {
 		return nil, fmt.Errorf("SFX_TOKEN environment variable not set")
 	}
 
-	listnr.client.AuthToken = os.Getenv(sfxToken)
+	listnr.scheduler.Sink.(*sfxclient.HTTPSink).AuthToken = sfxToken
 
 	// Prefer SFX_INGEST_URL over SFX_REALM
 	if os.Getenv("SFX_INGEST_URL") != "" {
-		listnr.client.DatapointEndpoint = os.Getenv("SFX_INGEST_URL")
+		listnr.scheduler.Sink.(*sfxclient.HTTPSink).DatapointEndpoint = os.Getenv("SFX_INGEST_URL")
 	} else if os.Getenv("SFX_REALM") != "" {
-		listnr.client.DatapointEndpoint = fmt.Sprintf("https://ingest.%s.signalfx.com/v2/datapoint", os.Getenv("SFX_REALM"))
+		listnr.scheduler.Sink.(*sfxclient.HTTPSink).DatapointEndpoint = fmt.Sprintf("https://ingest.%s.signalfx.com/v2/datapoint", os.Getenv("SFX_REALM"))
 	} else {
 		return nil, fmt.Errorf("SFX_INGEST_URL or SFX_REALM should be set")
 	}
@@ -113,15 +114,20 @@ func setupListener() (*listener, error) {
 		listnr.dimensionPairsToExclude = dims
 	}
 
-	listnr.datapointWriter = &sfxwriter.DatapointWriter{
-		PreprocessFunc: listnr.shouldDisptach,
-		SendFunc:       listnr.sendDatapoints,
-		InputChan:      listnr.dps,
-	}
+	listnr.ctx, listnr.cancel = context.WithCancel(context.Background())
+	listnr.scheduler.ReportingDelay(time.Duration(10) * time.Second)
+	listnr.scheduler.AddCallback(listnr.registry)
 
-	ctx, _ := context.WithCancel(context.Background())
-	listnr.datapointWriter.Start(ctx)
-
+	go func() {
+		err := listnr.scheduler.Schedule(listnr.ctx)
+		if err != nil {
+			if ec, ok := err.(*errors.ErrorChain); !ok || ec.Tail() != context.Canceled {
+				log.WithFields(log.Fields{
+					"err": err,
+				}).Error("Scheduler shutdown unexpectedly")
+			}
+		}
+	}()
 	return listnr, nil
 }
 
@@ -138,7 +144,8 @@ func main() {
 	http.HandleFunc("/", listnr.processLogs)
 
 	log.WithFields(log.Fields{
-		"ingestURL": listnr.ingestUrl,
+		"token":     listnr.scheduler.Sink.(*sfxclient.HTTPSink).AuthToken,
+		"ingestURL": listnr.scheduler.Sink.(*sfxclient.HTTPSink).DatapointEndpoint,
 		"port":      listnr.port,
 	}).Info("Starting up SignalFx Collector")
 
@@ -147,5 +154,9 @@ func main() {
 		log.WithFields(log.Fields{
 			"error": err,
 		}).Error("Failed to start SignalFx Collector")
+
+		if listnr.cancel != nil {
+			listnr.cancel()
+		}
 	}
 }

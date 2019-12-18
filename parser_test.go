@@ -51,7 +51,7 @@ func TestProcessLogs(t *testing.T) {
 		},
 	}
 
-	numExpectedDatapoints := []int{2, 3, 7, 1}
+	numExpectedMetrics := []int{2, 3, 7, 1}
 
 	for i, input := range validInputs {
 		actual, _ := detectAndParseLog(input)
@@ -62,10 +62,10 @@ func TestProcessLogs(t *testing.T) {
 			t.Error("Parsed log output does not match expected")
 		}
 
-		dps := collectDatapoints(actual, "test-app")
+		metrics, _ := processMetrics(actual, "test-app")
 
-		if numExpectedDatapoints[i] != len(dps) {
-			t.Errorf("Expected %d datapoints, received %d datapoints", numExpectedDatapoints[i], len(dps))
+		if numExpectedMetrics[i] != len(metrics) {
+			t.Errorf("Expected %d datapoints, received %d datapoints", numExpectedMetrics[i], len(metrics))
 		}
 
 	}

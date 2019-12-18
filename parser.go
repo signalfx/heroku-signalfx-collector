@@ -12,7 +12,6 @@ import (
 	"github.com/docker/go-units"
 	"github.com/mitchellh/mapstructure"
 	"github.com/signalfx/golib/v3/datapoint"
-	"github.com/signalfx/golib/v3/sfxclient"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -21,19 +20,13 @@ import (
 var rfc5424LogFormat = regexp.MustCompile(`\<(?P<pri>\d+)\>(?P<version>1) (?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{6})?\+\d{2}:\d{2}) (?P<hostname>[a-z0-9\-\_\.]+) (?P<appname>[a-z0-9\.-]+) (?P<procid>[a-z0-9\-\_\.]+) (?P<msgid>\-) (?P<message>.*)$`)
 
 type logLine struct {
-	PRI       string `json:pri`
-	Version   string `json:version`
-	Timestamp string `json:timestamp`
-	Hostname  string `json:hostname`
-	Appname   string `json:appname`
-	ProcId    string `json:procid`
-	Message   string `json:message`
-}
-
-type metricVal struct {
-	Name  string
-	Type  datapoint.MetricType
-	Value float64
+	PRI       string `json:"pri"`
+	Version   string `json:"version"`
+	Timestamp string `json:"timestamp"`
+	Hostname  string `json:"hostname"`
+	Appname   string `json:"appname"`
+	ProcId    string `json:"procid"`
+	Message   string `json:"message"`
 }
 
 // To parse out metricVal values when units exist in them
@@ -74,7 +67,7 @@ var refinedMetricNames = map[string]string{
 	"bytes":   "heroku.router_response_bytes",
 }
 
-func (sw *listener) processLogs(w http.ResponseWriter, req *http.Request) {
+func (listnr *listener) processLogs(w http.ResponseWriter, req *http.Request) {
 	log.Infoln(req.URL.Query().Encode())
 	appName, err := getAppNameFromParams(req.URL.Query())
 
@@ -101,7 +94,7 @@ func (sw *listener) processLogs(w http.ResponseWriter, req *http.Request) {
 		}
 
 		if processedLog != nil {
-			sw.dps <- collectDatapoints(processedLog, appName)
+			listnr.registry.updateMetrics(processMetrics(processedLog, appName))
 		}
 	}
 }
@@ -147,26 +140,28 @@ func detectAndParseLog(line string) (*logLine, error) {
 // message has information about dimensions and metrics, always in the
 // following form and this is the only part of the message that's processed
 // "key1=value1 key2=value2 key3=value3 sample#metric_name=metric_value"
-func collectDatapoints(ll *logLine, appName string) []*datapoint.Datapoint {
+func processMetrics(ll *logLine, appName string) ([]*metricVal, map[string]string) {
 	processType := dynoNumberFormat.ReplaceAllString(ll.ProcId, "")
-	metrics, dims := make([]*metricVal, 0), map[string]string{}
+	var metrics []*metricVal
+	var dims map[string]string
+
 	appNameDim := map[string]string{
 		"app_name": appName,
 	}
 
 	// Router logs are special
 	if processType == "router" {
-		metrics, dims = collectDatapointsForRouter(ll)
-		return getSFXDatapoints(metrics, mergeStringMaps(appNameDim, dims))
+		metrics, dims = processMetricsForRouter(ll)
+	} else {
+		metrics, dims = processMetricsForDyno(ll, processType)
 	}
 
-	metrics, dims = collectDatapointsForApp(ll, processType)
-	return getSFXDatapoints(metrics, mergeStringMaps(appNameDim, dims))
+	return metrics, mergeStringMaps(appNameDim, dims)
 }
 
 // Collects datapoints from an app. For more information, see here:
 // https://devcenter.heroku.com/articles/metrics
-func collectDatapointsForApp(ll *logLine, processType string) ([]*metricVal, map[string]string) {
+func processMetricsForDyno(ll *logLine, processType string) ([]*metricVal, map[string]string) {
 	metrics, dims := evaluateKeyValuePairs(
 		ll, map[string]string{"process_type": processType},
 		map[string]bool{}, dynoDimensionKeys,
@@ -176,7 +171,7 @@ func collectDatapointsForApp(ll *logLine, processType string) ([]*metricVal, map
 
 // Returns datapoints from router logs. For more information about data exposed, see:
 // https://devcenter.heroku.com/articles/http-routing#heroku-router-log-format
-func collectDatapointsForRouter(ll *logLine) ([]*metricVal, map[string]string) {
+func processMetricsForRouter(ll *logLine) ([]*metricVal, map[string]string) {
 	metrics, dims := evaluateKeyValuePairs(
 		ll, map[string]string{}, routerMetricKeys,
 		routerDimensionKeys,
@@ -230,28 +225,6 @@ func evaluateKeyValuePairs(ll *logLine, dims map[string]string,
 	return metrics, dims
 }
 
-func getSFXDatapoints(metrics []*metricVal, dims map[string]string) []*datapoint.Datapoint {
-	out := make([]*datapoint.Datapoint, 0)
-
-	for _, metric := range metrics {
-		datum := &datapoint.Datapoint{}
-		switch metric.Type {
-		case datapoint.Gauge:
-			datum = sfxclient.GaugeF(metric.Name, dims, metric.Value)
-		case datapoint.Counter:
-			datum = sfxclient.Counter(metric.Name, dims, int64(metric.Value))
-		case datapoint.Count:
-			datum = sfxclient.CumulativeF(metric.Name, dims, metric.Value)
-		}
-
-		log.Debugln(datum)
-
-		out = append(out, []*datapoint.Datapoint{datum,}...)
-	}
-
-	return out
-}
-
 func processDimensionPair(splitPair []string, prodId string) map[string]string {
 	out := make(map[string]string)
 
@@ -263,6 +236,7 @@ func processDimensionPair(splitPair []string, prodId string) map[string]string {
 		if prodId != "router" {
 			parsedValue := strings.Split(splitPair[1], ".")
 
+			// expects values of this form: "heroku.155370883.259625dd-a9c7-4987-9c86-08de28dd4f72"
 			if len(parsedValue) == 3 {
 				match := herokuObjectIdFormat.FindAllString(parsedValue[2], 1)
 				if len(match) == 1 {
@@ -302,11 +276,11 @@ func evaluateMetric(splitPair []string, isRouterMetric bool) (*metricVal, error)
 			if err != nil {
 				return nil, fmt.Errorf("unsupported metricVal like field encountered: [" + splitPair[0] + ", " + splitPair[1] + "]")
 			}
-			return getMetric(splitPair[0], float64(val), isRouterMetric)
+			return getMetric(splitPair[0], val, isRouterMetric)
 		}
 		return getMetric(splitPair[0], float64(val), isRouterMetric)
 	}
-	return getMetric(splitPair[0], float64(val), isRouterMetric)
+	return getMetric(splitPair[0], val, isRouterMetric)
 }
 
 // Returns metricVal name, removing the datapoint type identifiers
