@@ -159,4 +159,6 @@ func main() {
 			listnr.cancel()
 		}
 	}
+
+	log.Infoln("Shutting Down")
 }

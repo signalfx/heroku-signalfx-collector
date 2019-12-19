@@ -18,6 +18,7 @@ import (
 // Based on docs here: https://tools.ietf.org/html/rfc5424#section-6
 // and discussion here: https://stackoverflow.com/questions/25163830/explain-format-of-heroku-logs
 var rfc5424LogFormat = regexp.MustCompile(`\<(?P<pri>\d+)\>(?P<version>1) (?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{6})?\+\d{2}:\d{2}) (?P<hostname>[a-z0-9\-\_\.]+) (?P<appname>[a-z0-9\.-]+) (?P<procid>[a-z0-9\-\_\.]+) (?P<msgid>\-) (?P<message>.*)$`)
+var regexGroups = rfc5424LogFormat.SubexpNames()
 
 type logLine struct {
 	PRI       string `json:"pri"`
@@ -44,20 +45,9 @@ var dynoDimensionKeys = map[string]bool{"dyno": true}
 
 // These fields are based on Heroku docs. For more information, see here:
 // https://devcenter.heroku.com/articles/http-routing#heroku-router-log-format
-var routerDimensionKeys = map[string]bool{
-	"status":   true,
-	"method":   true,
-	"dyno":     true,
-	"protocol": true,
-	"host":     true,
-	"code":     true,
-}
+var routerDimensionKeys = makeStringSet("status", "method", "dyno", "protocol", "host", "code")
 
-var routerMetricKeys = map[string]bool{
-	"connect": true,
-	"service": true,
-	"bytes":   true,
-}
+var routerMetricKeys = makeStringSet("connect", "service", "bytes")
 
 // In some cases metricVal names derived from the logs don't make a lot of sense.
 // Have an alternative name for such metrics
@@ -111,7 +101,6 @@ func getAppNameFromParams(values url.Values) (string, error) {
 // Returns a logLine struct if the line matches a supported format
 func detectAndParseLog(line string) (*logLine, error) {
 	match := rfc5424LogFormat.FindStringSubmatch(line)
-	regexGroups := rfc5424LogFormat.SubexpNames()
 
 	if len(match) != len(regexGroups) {
 		return nil, nil

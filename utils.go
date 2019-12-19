@@ -61,3 +61,11 @@ func evaluateBoolEnvVariable(envKey string, defaultVal bool) (bool, error) {
 
 	return strconv.ParseBool(envKey)
 }
+
+func makeStringSet(vals ...string) map[string]bool {
+	out := make(map[string]bool)
+	for _, v := range vals {
+		out[v] = true
+	}
+	return out
+}
