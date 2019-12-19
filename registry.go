@@ -20,7 +20,6 @@ type metricRegistry struct {
 }
 
 func (mr *metricRegistry) Datapoints() []*datapoint.Datapoint {
-	log.Infoln("Datapoints method called")
 	mr.RLock()
 	defer mr.RUnlock()
 

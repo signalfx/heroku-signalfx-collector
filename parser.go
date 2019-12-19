@@ -41,17 +41,20 @@ var dynoNumberFormat = regexp.MustCompile(`\.\d+$`)
 
 var herokuObjectIdFormat = regexp.MustCompile(`^[0-9a-fA-F]{8}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{12}$`)
 
-var dynoDimensionKeys = map[string]bool{"dyno": true}
-
 // These fields are based on Heroku docs. For more information, see here:
 // https://devcenter.heroku.com/articles/http-routing#heroku-router-log-format
 var routerDimensionKeys = makeStringSet("status", "method", "dyno", "protocol", "host", "code")
+var dynoDimensionKeys = makeStringSet("dyno")
+var herokuDimensionKeys = mergeBoolMaps(dynoDimensionKeys, routerDimensionKeys)
 
-var routerMetricKeys = makeStringSet("connect", "service", "bytes")
+// These fields are based on Heroku docs. For more information, see here:
+// https://devcenter.heroku.com/articles/http-routing#heroku-router-log-format
+// Also note that all the 3 strings stated here are all from router logs
+var herokuMetricKeys = makeStringSet("connect", "service", "bytes")
 
 // In some cases metricVal names derived from the logs don't make a lot of sense.
 // Have an alternative name for such metrics
-var refinedMetricNames = map[string]string{
+var refinedRouterMetricNames = map[string]string{
 	"connect": "heroku.router_request_connect_time_millis",
 	"service": "heroku.router_request_service_time_millis",
 	"bytes":   "heroku.router_response_bytes",
@@ -131,52 +134,68 @@ func detectAndParseLog(line string) (*logLine, error) {
 // "key1=value1 key2=value2 key3=value3 sample#metric_name=metric_value"
 func processMetrics(ll *logLine, appName string) ([]*metricVal, map[string]string) {
 	processType := dynoNumberFormat.ReplaceAllString(ll.ProcId, "")
-	var metrics []*metricVal
-	var dims map[string]string
 
-	appNameDim := map[string]string{
-		"app_name": appName,
+	metrics, dims := ll.evaluateKeyValuePairs()
+	dims = mergeStringMaps(map[string]string{"app_name": appName,}, dims)
+
+	switch processType {
+	case "router":
+		metrics, dims = fixUpRouterMetricDims(metrics, dims)
+	default:
+		metrics, dims = fixUpRouterDynoMetricDims(metrics, dims, processType)
 	}
 
-	// Router logs are special
-	if processType == "router" {
-		metrics, dims = processMetricsForRouter(ll)
-	} else {
-		metrics, dims = processMetricsForDyno(ll, processType)
-	}
-
-	return metrics, mergeStringMaps(appNameDim, dims)
-}
-
-// Collects datapoints from an app. For more information, see here:
-// https://devcenter.heroku.com/articles/metrics
-func processMetricsForDyno(ll *logLine, processType string) ([]*metricVal, map[string]string) {
-	metrics, dims := evaluateKeyValuePairs(
-		ll, map[string]string{"process_type": processType},
-		map[string]bool{}, dynoDimensionKeys,
-	)
 	return metrics, dims
 }
 
-// Returns datapoints from router logs. For more information about data exposed, see:
-// https://devcenter.heroku.com/articles/http-routing#heroku-router-log-format
-func processMetricsForRouter(ll *logLine) ([]*metricVal, map[string]string) {
-	metrics, dims := evaluateKeyValuePairs(
-		ll, map[string]string{}, routerMetricKeys,
-		routerDimensionKeys,
-	)
+// Cleanup router metric names
+func fixUpRouterMetricDims(metrics []*metricVal,
+	dims map[string]string) ([]*metricVal, map[string]string) {
+	for i := range metrics {
+		if refinedRouterMetricNames[metrics[i].Name] != "" {
+			metrics[i].Name = refinedRouterMetricNames[metrics[i].Name]
+		}
+	}
+	return metrics, dims
+}
+
+// Handle post processing of metrics and dims collected. More specifically,
+// (1) add "process_type" dimension which has the value set to the process
+// with which the dyno is initialized. (2) derive "dyno_id" dimension from
+// existing "dyno" field collected. (3) add "dyno" dimension with the same
+// value as source. This will make it easy to filter both router and dyno
+// metrics by a single dimension
+func fixUpRouterDynoMetricDims(metrics []*metricVal, dims map[string]string,
+	processType string) ([]*metricVal, map[string]string) {
+	dims["process_type"] = processType
+	if dims["dyno"] != "" {
+		// expects values of this form: "heroku.155370883.259625dd-a9c7-4987-9c86-08de28dd4f72"
+
+		parsedValue := strings.Split(dims["dyno"], ".")
+		if len(parsedValue) == 3 {
+			match := herokuObjectIdFormat.FindAllString(parsedValue[2], 1)
+			if len(match) == 1 {
+				dims["dyno_id"] = match[0]
+			}
+		}
+
+		// Remove once "dyno_id" is derived
+		delete(dims, "dyno")
+	}
+
+	// add dyno name as a dimension
+	if dims["source"] != "" {
+		dims["dyno"] = dims["source"]
+	}
+
 	return metrics, dims
 }
 
 // Gets metrics and dimensions from the message field on a log line. Note that this
-// method adds "source" and "process_type" dimensions on all datapoints by default,
-// and its values would be dyno name and process type using which the dyno was
-// initialized respectively
-func evaluateKeyValuePairs(ll *logLine, dims map[string]string,
-	metricsToIncludeFromMessage map[string]bool,
-	dimsToIncludeFromMessage map[string]bool) ([]*metricVal, map[string]string) {
+// method adds "source" dimensions by default on all  metrics
+func (ll *logLine) evaluateKeyValuePairs() ([]*metricVal, map[string]string) {
 	metrics := make([]*metricVal, 0)
-	dims = mergeStringMaps(dims, map[string]string{"source": ll.ProcId})
+	dims := map[string]string{"source": ll.ProcId}
 
 	for _, pair := range strings.Split(ll.Message, " ") {
 		splitPair := strings.Split(pair, "=")
@@ -190,8 +209,8 @@ func evaluateKeyValuePairs(ll *logLine, dims map[string]string,
 			"key/value pair": pair,
 		}).Debug("Processing key/value pair in log message")
 
-		if isMetric(splitPair[0], metricsToIncludeFromMessage) {
-			metric, err := evaluateMetric(splitPair, ll.ProcId == "router")
+		if isMetric(splitPair[0], herokuMetricKeys) {
+			metric, err := evaluateMetric(splitPair)
 
 			if err != nil {
 				log.WithFields(log.Fields{
@@ -201,51 +220,25 @@ func evaluateKeyValuePairs(ll *logLine, dims map[string]string,
 				continue
 			}
 
-			metrics = append(metrics, []*metricVal{metric,}...)
+			metrics = append(metrics, []*metricVal{metric}...)
 			continue
 		}
 
 		// Dimensions for custom metrics
-		if isDimension(splitPair[0], dimsToIncludeFromMessage) {
-			dims = mergeStringMaps(dims, processDimensionPair(splitPair, ll.ProcId))
+		if isDimension(splitPair[0], herokuDimensionKeys) {
+			dims = mergeStringMaps(dims, map[string]string{
+				strings.Replace(splitPair[0], "sfxdimension#", "", 1): splitPair[1],
+			})
 		}
 	}
 
 	return metrics, dims
 }
 
-func processDimensionPair(splitPair []string, prodId string) map[string]string {
-	out := make(map[string]string)
-
-	switch splitPair[0] {
-	// metricVal logs from dynos have the dyno id encoded in a field called "dyno"
-	// Parse this value out and sync it as "dyno_id" dimension
-	case "dyno":
-		// This dimension has different values in router logs vs dyno logs
-		if prodId != "router" {
-			parsedValue := strings.Split(splitPair[1], ".")
-
-			// expects values of this form: "heroku.155370883.259625dd-a9c7-4987-9c86-08de28dd4f72"
-			if len(parsedValue) == 3 {
-				match := herokuObjectIdFormat.FindAllString(parsedValue[2], 1)
-				if len(match) == 1 {
-					out["dyno_id"] = match[0]
-				}
-			}
-		} else {
-			out[splitPair[0]] = splitPair[1]
-		}
-	default:
-		out[strings.Replace(splitPair[0], "sfxdimension#", "", 1)] = splitPair[1]
-	}
-
-	return out
-}
-
 // Evaluates metrics in the message of a log line. This method assumes the
 // input will always be of the following form ["sample#metric_name", "metric_value"]
 // where "metric_value" may or may not include units
-func evaluateMetric(splitPair []string, isRouterMetric bool) (*metricVal, error) {
+func evaluateMetric(splitPair []string) (*metricVal, error) {
 	val, err := strconv.ParseFloat(splitPair[1], 64)
 
 	// Means the value is not numeric which is indicative of units being
@@ -265,23 +258,19 @@ func evaluateMetric(splitPair []string, isRouterMetric bool) (*metricVal, error)
 			if err != nil {
 				return nil, fmt.Errorf("unsupported metricVal like field encountered: [" + splitPair[0] + ", " + splitPair[1] + "]")
 			}
-			return getMetric(splitPair[0], val, isRouterMetric)
+			return getMetric(splitPair[0], val)
 		}
-		return getMetric(splitPair[0], float64(val), isRouterMetric)
+		return getMetric(splitPair[0], float64(val))
 	}
-	return getMetric(splitPair[0], val, isRouterMetric)
+	return getMetric(splitPair[0], val)
 }
 
 // Returns metricVal name, removing the datapoint type identifiers
-func getMetric(rawMetricName string, metricValue float64, isRouterMetric bool) (*metricVal, error) {
+func getMetric(rawMetricName string, metricValue float64) (*metricVal, error) {
 	metricName, metricType, err := processRawMetricKey(rawMetricName)
 
 	if err != nil {
 		return nil, err
-	}
-
-	if isRouterMetric && refinedMetricNames[metricName] != "" {
-		metricName = refinedMetricNames[metricName]
 	}
 
 	return &metricVal{

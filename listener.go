@@ -31,8 +31,6 @@ func setupListener() (*listener, error) {
 	// Only log the Info severity or above
 	log.SetLevel(log.InfoLevel)
 
-	log.Infoln("Dry run mode on, no datapoints will be emitted to SignalFx")
-
 	logLevel := "info"
 	sfxDebug := os.Getenv("SFX_DEBUG")
 	isDebug, err := evaluateBoolEnvVariable(sfxDebug, false)
@@ -144,7 +142,6 @@ func main() {
 	http.HandleFunc("/", listnr.processLogs)
 
 	log.WithFields(log.Fields{
-		"token":     listnr.scheduler.Sink.(*sfxclient.HTTPSink).AuthToken,
 		"ingestURL": listnr.scheduler.Sink.(*sfxclient.HTTPSink).DatapointEndpoint,
 		"port":      listnr.port,
 	}).Info("Starting up SignalFx Collector")

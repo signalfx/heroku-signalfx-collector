@@ -44,6 +44,18 @@ func mergeStringMaps(maps ...map[string]string) map[string]string {
 	return ret
 }
 
+func mergeBoolMaps(maps ...map[string]bool) map[string]bool {
+	ret := map[string]bool{}
+
+	for _, m := range maps {
+		for k, v := range m {
+			ret[k] = v
+		}
+	}
+
+	return ret
+}
+
 func makeSetOfStringsFromArray(metricsToExlcude []string) map[string]bool {
 	ret := map[string]bool{}
 
