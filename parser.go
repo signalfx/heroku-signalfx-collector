@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/docker/go-units"
 	"github.com/mitchellh/mapstructure"
@@ -30,15 +31,8 @@ type logLine struct {
 	Message   string `json:"message"`
 }
 
-// To parse out metricVal values when units exist in them
-var numberFormat = regexp.MustCompile(`^\d+(\.\d+)?`)
-
-// To match dyno numbers from dyno names. Dyno names the following format
-// "web.45", "run.9123", "worker.2" where the prefix denotes the type of process
-// the dyno is initialized with. Ror more information, see:
-// https://devcenter.heroku.com/articles/process-model#process-types-vs-dynos
-var dynoNumberFormat = regexp.MustCompile(`\.\d+$`)
-
+// Format based on docs here,
+// https://devcenter.heroku.com/articles/platform-api-reference#custom-types
 var herokuObjectIdFormat = regexp.MustCompile(`^[0-9a-fA-F]{8}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{12}$`)
 
 // These fields are based on Heroku docs. For more information, see here:
@@ -105,6 +99,7 @@ func getAppNameFromParams(values url.Values) (string, error) {
 func detectAndParseLog(line string) (*logLine, error) {
 	match := rfc5424LogFormat.FindStringSubmatch(line)
 
+	// Simply ignore logs that not match the specified format
 	if len(match) != len(regexGroups) {
 		return nil, nil
 	}
@@ -133,7 +128,11 @@ func detectAndParseLog(line string) (*logLine, error) {
 // following form and this is the only part of the message that's processed
 // "key1=value1 key2=value2 key3=value3 sample#metric_name=metric_value"
 func processMetrics(ll *logLine, appName string) ([]*metricVal, map[string]string) {
-	processType := dynoNumberFormat.ReplaceAllString(ll.ProcId, "")
+	// To match dyno numbers from dyno names. Dyno names the following format
+	// "web.45", "run.9123", "worker.2" where the prefix denotes the type of process
+	// the dyno is initialized with. Ror more information, see:
+	// https://devcenter.heroku.com/articles/process-model#process-types-vs-dynos
+	processType := strings.Split(ll.ProcId, ".")[0]
 
 	metrics, dims := ll.evaluateKeyValuePairs()
 	dims = mergeStringMaps(map[string]string{"app_name": appName,}, dims)
@@ -239,30 +238,47 @@ func (ll *logLine) evaluateKeyValuePairs() ([]*metricVal, map[string]string) {
 // input will always be of the following form ["sample#metric_name", "metric_value"]
 // where "metric_value" may or may not include units
 func evaluateMetric(splitPair []string) (*metricVal, error) {
-	val, err := strconv.ParseFloat(splitPair[1], 64)
+	val, err := getNumericValue(splitPair[1])
 
-	// Means the value is not numeric which is indicative of units being
-	// present in the metricVal value
 	if err != nil {
-		// If the units pertain to memory, get size in bytes
-		val, err := units.RAMInBytes(splitPair[1])
-
-		if err != nil {
-			matches := numberFormat.FindAllString(splitPair[1], 1)
-			if len(matches) != 1 {
-				return nil, fmt.Errorf("unsupported metricVal like field encountered: [" + splitPair[0] + ", " + splitPair[1] + "]")
-			}
-
-			val, err := strconv.ParseFloat(matches[0], 64)
-
-			if err != nil {
-				return nil, fmt.Errorf("unsupported metricVal like field encountered: [" + splitPair[0] + ", " + splitPair[1] + "]")
-			}
-			return getMetric(splitPair[0], val)
-		}
-		return getMetric(splitPair[0], float64(val))
+		return nil, err
 	}
-	return getMetric(splitPair[0], val)
+
+	return getMetric(splitPair[0], *val)
+}
+
+// Returns a value stripping out the units for supported units.
+// If an unsupported unit is encountered, the metric will be dropped.
+func getNumericValue(value string) (*float64, error) {
+	out := new(float64)
+	// If the units pertain to memory, get size in bytes
+	bytes, err := units.RAMInBytes(value)
+
+	if err == nil {
+		*out = float64(bytes)
+		return out, nil
+	}
+
+	duration, err := time.ParseDuration(value)
+
+	if err == nil {
+		*out = float64(duration.Milliseconds())
+		return out, nil
+	}
+
+	// Check for units called "pages" from memory_pgpgin and memory_pgpgout
+	// which are standard metrics in Heroku
+	value = strings.Replace(value, "pages", "", 1)
+
+	numericValue, err := strconv.ParseFloat(value, 64)
+
+	if err != nil {
+		return nil, fmt.Errorf("found unsupported metric unit in %s", value)
+	}
+
+	*out = numericValue
+	return out, nil
+
 }
 
 // Returns metricVal name, removing the datapoint type identifiers
@@ -290,7 +306,14 @@ func processRawMetricKey(rawMetricName string) (string, datapoint.MetricType, er
 		return strings.Replace(rawMetricName, "cumulative#", "", 1), datapoint.Counter, nil
 	}
 
+	// Standard Heroku metrics log run-time metrics identified as samples in the log message.
+	// Remove the sample# prefix from such metric names, and also add a "heroku" prefix to
+	// make metrics easily searchable
+	if isSample(rawMetricName) {
+		return strings.Replace(rawMetricName, "sample#", "heroku", 1), datapoint.Gauge, nil
+	}
+
 	// Other default metrics are categorized as gauges. This includes fields in the
-	// router log message stored in routerMetricKeys
-	return strings.Replace(strings.Replace(rawMetricName, "sample#", "", 1), "gauge#", "", 1), datapoint.Gauge, nil
+	// router log message stored in routerMetricKeys.
+	return strings.Replace(rawMetricName, "gauge#", "", 1), datapoint.Gauge, nil
 }
