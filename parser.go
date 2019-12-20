@@ -320,7 +320,7 @@ func processRawMetricKey(rawMetricName string) (string, datapoint.MetricType, er
 	// Remove the sample# prefix from such metric names, and also add a "heroku" prefix to
 	// make metrics easily searchable
 	if isSample(rawMetricName) {
-		return strings.Replace(rawMetricName, "sample#", "heroku", 1), datapoint.Gauge, nil
+		return strings.Replace(rawMetricName, "sample#", "heroku.", 1), datapoint.Gauge, nil
 	}
 
 	// Other default metrics are categorized as gauges. This includes fields in the
