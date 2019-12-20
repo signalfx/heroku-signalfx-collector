@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/url"
+	"reflect"
 	"testing"
 )
 
@@ -62,7 +64,9 @@ func TestProcessLogs(t *testing.T) {
 			t.Error("Parsed log output does not match expected")
 		}
 
-		metrics, _ := processMetrics(actual, "test-app")
+		metrics, _ := processMetrics(actual, map[string]string{
+			"app_name": "test-app",
+		})
 
 		if numExpectedMetrics[i] != len(metrics) {
 			t.Errorf("Expected %d datapoints, received %d datapoints", numExpectedMetrics[i], len(metrics))
@@ -70,4 +74,31 @@ func TestProcessLogs(t *testing.T) {
 
 	}
 
+}
+
+func TestGetDimensionParisFromParams(t *testing.T) {
+	values := url.Values{
+		"dim1": []string{"val1", "val2"},
+		"dim2": []string{"val1"},
+	}
+
+	actual, err := getDimensionParisFromParams(values)
+
+	// Expected to error out since "app_name" is not passed in
+	if err == nil {
+		t.Errorf("Expected to fail since app_name is not passed in")
+	}
+
+	values["app_name"] = []string{"test"}
+	expected := map[string]string{
+		"dim1": "val1",
+		"dim2": "val1",
+		"app_name": "test",
+	}
+
+	actual, err = getDimensionParisFromParams(values)
+
+	if !reflect.DeepEqual(expected, actual) {
+		t.Errorf("Expected %v datapoints, received %v datapoints", expected, actual)
+	}
 }

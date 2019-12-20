@@ -55,8 +55,7 @@ var refinedRouterMetricNames = map[string]string{
 }
 
 func (listnr *listener) processLogs(w http.ResponseWriter, req *http.Request) {
-	log.Infoln(req.URL.Query().Encode())
-	appName, err := getAppNameFromParams(req.URL.Query())
+	dims, err := getDimensionParisFromParams(req.URL.Query())
 
 	if err != nil {
 		log.WithFields(log.Fields{
@@ -81,18 +80,26 @@ func (listnr *listener) processLogs(w http.ResponseWriter, req *http.Request) {
 		}
 
 		if processedLog != nil {
-			listnr.registry.updateMetrics(processMetrics(processedLog, appName))
+			listnr.registry.updateMetrics(processMetrics(processedLog, dims))
 		}
 	}
 }
 
-func getAppNameFromParams(values url.Values) (string, error) {
-	appName := values["appname"]
+func getDimensionParisFromParams(values url.Values) (map[string]string, error) {
+	dims := map[string]string{}
 
-	if len(appName) != 1 || appName[0] == "" {
-		return "", fmt.Errorf(fmt.Sprintf("appname parameter takes exactly one value. current value: %v", appName))
+	for dimKey, dimValue := range values {
+		// if parameters has multiple value, dimensionalize only the first one
+		if len(dimValue) > 0 && dimValue[0] != "" {
+			dims[dimKey] = dimValue[0]
+		}
 	}
-	return appName[0], nil
+
+	if dims["app_name"] == "" {
+		return nil, fmt.Errorf("app_name parameter takes exactly one value. current value: %v", values["app_name"])
+	}
+
+	return dims, nil
 }
 
 // Returns a logLine struct if the line matches a supported format
@@ -127,7 +134,7 @@ func detectAndParseLog(line string) (*logLine, error) {
 // message has information about dimensions and metrics, always in the
 // following form and this is the only part of the message that's processed
 // "key1=value1 key2=value2 key3=value3 sample#metric_name=metric_value"
-func processMetrics(ll *logLine, appName string) ([]*metricVal, map[string]string) {
+func processMetrics(ll *logLine, dimsFromParmas map[string]string) ([]*metricVal, map[string]string) {
 	// To match dyno numbers from dyno names. Dyno names the following format
 	// "web.45", "run.9123", "worker.2" where the prefix denotes the type of process
 	// the dyno is initialized with. Ror more information, see:
@@ -135,7 +142,10 @@ func processMetrics(ll *logLine, appName string) ([]*metricVal, map[string]strin
 	processType := strings.Split(ll.ProcId, ".")[0]
 
 	metrics, dims := ll.evaluateKeyValuePairs()
-	dims = mergeStringMaps(map[string]string{"app_name": appName,}, dims)
+
+	// dimensions from parameters will take precedence over dimensions from logs
+	// in case there are duplicate keys
+	dims = mergeStringMaps(dimsFromParmas, dims)
 
 	switch processType {
 	case "router":
