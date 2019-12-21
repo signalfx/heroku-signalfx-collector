@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/signalfx/golib/v3/datapoint"
@@ -67,29 +66,13 @@ func setupListener() (*listener, error) {
 	// Looks for comma-separated metricVal names to exclude. Looks values like the following
 	// "metric_name1,metric_name2,metric_name3"
 	if os.Getenv("SFX_METRICS_TO_EXCLUDE") != "" {
-		metricsToExlcude := strings.Split(os.Getenv("SFX_METRICS_TO_EXCLUDE"), ",")
-		listnr.metricsToExclude = makeSetOfStringsFromArray(metricsToExlcude)
-
-		log.WithFields(log.Fields{
-			"metricVal filter": "Metrics to exclude",
-		}).Info(metricsToExlcude)
+		listnr.metricsToExclude = getMetricsToExclude(os.Getenv("SFX_METRICS_TO_EXCLUDE"))
 	}
 
 	// Looks for dimensions key-value pairs to exclude. Looks values like the following
 	// "dim1=val1,dim2=val2,dim3=val3"
 	if os.Getenv("SFX_DIMENSION_PAIRS_TO_EXCLUDE") != "" {
-		dimensionPairs := strings.Split(os.Getenv("SFX_DIMENSION_PAIRS_TO_EXCLUDE"), ",")
-		dims := make(map[string]string)
-		for _, pair := range dimensionPairs {
-			splitPair := strings.Split(pair, "=")
-			dims[splitPair[0]] = splitPair[1]
-		}
-
-		log.WithFields(log.Fields{
-			"dimension filter": "Dimension key-value pairs to exclude",
-		}).Info(dims)
-
-		listnr.dimensionPairsToExclude = dims
+		listnr.dimensionPairsToExclude = getDimensionPairsToExclude(os.Getenv("SFX_DIMENSION_PAIRS_TO_EXCLUDE"))
 	}
 
 	listnr.datapointWriter = &sfxwriter.DatapointWriter{
