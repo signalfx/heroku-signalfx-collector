@@ -17,7 +17,7 @@ func isDimension(key string, dimsToIncludeFromMessage map[string]bool) bool {
 }
 
 func isCounter(key string) bool {
-	return strings.HasPrefix(key, "cumulative#")
+	return strings.HasPrefix(key, "counter#")
 }
 
 func isGauge(key string) bool {

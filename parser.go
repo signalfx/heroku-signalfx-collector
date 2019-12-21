@@ -80,7 +80,8 @@ func (listnr *listener) processLogs(w http.ResponseWriter, req *http.Request) {
 		}
 
 		if processedLog != nil {
-			listnr.registry.updateMetrics(processMetrics(processedLog, dims))
+			metrics, dims := processMetrics(processedLog, dims)
+			listnr.registry.updateMetrics(metrics, dims)
 		}
 	}
 }

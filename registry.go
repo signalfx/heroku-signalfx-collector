@@ -62,7 +62,10 @@ func (mr *metricRegistry) updateMetric(mv *metricVal, dims map[string]string) {
 
 	switch mv.Type {
 	case datapoint.Gauge:
-		g := mr.registerOrGetGauge(mv.Name, dims, id)
+		g := mr.registerOrGetGauge(mv.Name, dims, id, mv.Type)
+		g.Latest(mv.Value)
+	case datapoint.Count:
+		g := mr.registerOrGetGauge(mv.Name, dims, id, mv.Type)
 		g.Latest(mv.Value)
 	case datapoint.Counter:
 		cu := mr.registerOrGetCumulative(mv.Name, dims, id)
@@ -90,7 +93,7 @@ func (mr *metricRegistry) registerOrGetCumulative(name string, dims map[string]s
 	return mr.cumulativeCounters[id]
 }
 
-func (mr *metricRegistry) registerOrGetGauge(name string, dims map[string]string, id metricId) *gaugeCollector {
+func (mr *metricRegistry) registerOrGetGauge(name string, dims map[string]string, id metricId, metricType datapoint.MetricType) *gaugeCollector {
 	mr.Lock()
 	defer mr.Unlock()
 
@@ -98,10 +101,10 @@ func (mr *metricRegistry) registerOrGetGauge(name string, dims map[string]string
 		mr.gauges[id] = &gaugeCollector{
 			MetricName: name,
 			Dimensions: dims,
+			Type:       metricType,
 		}
 	}
 
-	//mr.markUsed(id)
 	return mr.gauges[id]
 }
 

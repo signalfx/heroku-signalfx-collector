@@ -24,7 +24,7 @@ func (g *gaugeCollector) Latest(val float64) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	g.latest += val
+	g.latest = val
 }
 
 // Datapoints returns the latest datapoint, or nil if there is no set metric name
