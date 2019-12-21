@@ -273,7 +273,7 @@ func getNumericValue(value string) (*float64, error) {
 	duration, err := time.ParseDuration(value)
 
 	if err == nil {
-		*out = float64(duration.Milliseconds())
+		*out = duration.Seconds() * 1000
 		return out, nil
 	}
 
