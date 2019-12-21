@@ -82,7 +82,7 @@ func TestGetDimensionParisFromParams(t *testing.T) {
 		"dim2": []string{"val1"},
 	}
 
-	actual, err := getDimensionParisFromParams(values)
+	_, err := getDimensionParisFromParams(values)
 
 	// Expected to error out since "app_name" is not passed in
 	if err == nil {
@@ -91,12 +91,12 @@ func TestGetDimensionParisFromParams(t *testing.T) {
 
 	values["app_name"] = []string{"test"}
 	expected := map[string]string{
-		"dim1": "val1",
-		"dim2": "val1",
+		"dim1":     "val1",
+		"dim2":     "val1",
 		"app_name": "test",
 	}
 
-	actual, err = getDimensionParisFromParams(values)
+	actual, _ := getDimensionParisFromParams(values)
 
 	if !reflect.DeepEqual(expected, actual) {
 		t.Errorf("Expected %v datapoints, received %v datapoints", expected, actual)

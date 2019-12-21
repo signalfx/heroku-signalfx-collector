@@ -54,7 +54,7 @@ func setupListener() (*listener, error) {
 		dps:      make(chan []*datapoint.Datapoint, 1),
 		client:   sfxclient.NewHTTPSink(),
 		port:     8000,
-		registry: newRegistry(),
+		registry: newRegistry(5 * time.Minute),
 	}
 
 	// Heroku assigns a port dynamically for an app. 8000 port is used only
@@ -140,7 +140,7 @@ func (listnr *listener) setupDatapointCollector() {
 		"reporting interval": intervalSeconds,
 	}).Info("Setting up datapoint collector")
 
-	listnr.collectDatapointsOnInterval(time.NewTicker(time.Duration(intervalSeconds) * time.Second))
+	listnr.collectDatapointsOnInterval(time.NewTicker(time.Duration(intervalSeconds) * time.Second), context.Background())
 }
 
 func main() {

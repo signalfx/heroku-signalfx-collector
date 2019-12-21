@@ -36,12 +36,14 @@ func (listnr *listener) shouldDisptach(datapoint *datapoint.Datapoint) bool {
 	return dispatch
 }
 
-func (listnr *listener) collectDatapointsOnInterval(ticker *time.Ticker) {
+func (listnr *listener) collectDatapointsOnInterval(ticker *time.Ticker, ctx context.Context) {
 	go func() {
 		for {
 			select {
 			case <-ticker.C:
 				listnr.dps <- listnr.registry.Datapoints()
+			case <-ctx.Done():
+				return
 			}
 		}
 	}()
