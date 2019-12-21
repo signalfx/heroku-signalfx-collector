@@ -66,12 +66,20 @@ func makeSetOfStringsFromArray(metricsToExlcude []string) map[string]bool {
 	return ret
 }
 
-func evaluateBoolEnvVariable(envKey string, defaultVal bool) (bool, error) {
-	if envKey == "" {
+func evaluateBoolEnvVariable(envVal string, defaultVal bool) (bool, error) {
+	if envVal == "" {
 		return defaultVal, nil
 	}
 
-	return strconv.ParseBool(envKey)
+	return strconv.ParseBool(envVal)
+}
+
+func evaluateIntEnvVariable(envVal string, defaultVal int64) (int64, error) {
+	if envVal == "" {
+		return defaultVal, nil
+	}
+
+	return strconv.ParseInt(envVal, 10, 64)
 }
 
 func makeStringSet(vals ...string) map[string]bool {
@@ -79,5 +87,6 @@ func makeStringSet(vals ...string) map[string]bool {
 	for _, v := range vals {
 		out[v] = true
 	}
+
 	return out
 }

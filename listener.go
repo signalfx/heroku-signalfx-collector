@@ -124,6 +124,25 @@ func setupListener() (*listener, error) {
 	return listnr, nil
 }
 
+func (listnr *listener) setupDatapointCollector() {
+	reportingInterval := os.Getenv("SFX_REPORTING_INTERVAL")
+
+	defaultIntervalSeconds := int64(10)
+	intervalSeconds, err := evaluateIntEnvVariable(reportingInterval, defaultIntervalSeconds)
+
+	if err != nil {
+		log.WithFields(log.Fields{
+			"SFX_REPORTING_INTERVAL": reportingInterval,
+		}).Error("Failed to get reporting interval, defaulting to 10s")
+	}
+
+	log.WithFields(log.Fields{
+		"reporting interval": intervalSeconds,
+	}).Info("Setting up datapoint collector")
+
+	listnr.collectDatapointsOnInterval(time.NewTicker(time.Duration(intervalSeconds) * time.Second))
+}
+
 func main() {
 	listnr, err := setupListener()
 
@@ -135,7 +154,7 @@ func main() {
 	}
 
 	// Setup datapoint collection on a fixed interval
-	listnr.collectDatapointsOnInterval(time.NewTicker(10 * time.Second))
+	listnr.setupDatapointCollector()
 
 	http.HandleFunc("/", listnr.processLogs)
 
