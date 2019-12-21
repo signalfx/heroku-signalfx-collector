@@ -57,7 +57,7 @@ func setupListener() (*listener, error) {
 
 	// Prefer SFX_INGEST_URL over SFX_REALM
 	if os.Getenv("SFX_INGEST_URL") != "" {
-		listnr.client.DatapointEndpoint = os.Getenv("SFX_INGEST_URL")
+		listnr.client.DatapointEndpoint = fmt.Sprintf("%s/v2/datapoint", os.Getenv("SFX_INGEST_URL"))
 	} else if os.Getenv("SFX_REALM") != "" {
 		listnr.client.DatapointEndpoint = fmt.Sprintf("https://ingest.%s.signalfx.com/v2/datapoint", os.Getenv("SFX_REALM"))
 	} else {
