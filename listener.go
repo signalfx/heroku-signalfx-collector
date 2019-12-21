@@ -26,29 +26,11 @@ type listener struct {
 }
 
 func setupListener() (*listener, error) {
-	// Output to stderr instead of stdout
-	log.SetOutput(os.Stderr)
 
-	// Only log the Info severity or above
-	log.SetLevel(log.InfoLevel)
-
-	logLevel := "info"
-	sfxDebug := os.Getenv("SFX_DEBUG")
-	isDebug, err := evaluateBoolEnvVariable(sfxDebug, false)
-
-	if err != nil {
-		log.WithFields(log.Fields{
-			"error":     err,
-			"SFX_DEBUG": sfxDebug,
-		}).Error("This environment variable supports only boolean values")
+	sfxToken := os.Getenv("SFX_TOKEN")
+	if sfxToken == "" {
+		return nil, fmt.Errorf("SFX_TOKEN environment variable not set")
 	}
-
-	if isDebug {
-		log.SetLevel(log.DebugLevel)
-		logLevel = "debug"
-	}
-
-	log.Infof("Using log level %s", logLevel)
 
 	listnr := &listener{
 		dps:      make(chan []*datapoint.Datapoint, 1),
@@ -56,6 +38,8 @@ func setupListener() (*listener, error) {
 		port:     8000,
 		registry: newRegistry(5 * time.Minute),
 	}
+
+	listnr.client.AuthToken = sfxToken
 
 	// Heroku assigns a port dynamically for an app. 8000 port is used only
 	// for testing/developing purposes
@@ -70,12 +54,6 @@ func setupListener() (*listener, error) {
 		listnr.port = port
 
 	}
-	sfxToken := os.Getenv("SFX_TOKEN")
-	if sfxToken == "" {
-		return nil, fmt.Errorf("SFX_TOKEN environment variable not set")
-	}
-
-	listnr.client.AuthToken = sfxToken
 
 	// Prefer SFX_INGEST_URL over SFX_REALM
 	if os.Getenv("SFX_INGEST_URL") != "" {
@@ -121,6 +99,31 @@ func setupListener() (*listener, error) {
 	}
 
 	listnr.datapointWriter.Start(context.Background())
+
+	// Output to stderr instead of stdout
+	log.SetOutput(os.Stderr)
+
+	// Only log the Info severity or above
+	log.SetLevel(log.InfoLevel)
+
+	logLevel := "info"
+	sfxDebug := os.Getenv("SFX_DEBUG")
+	isDebug, err := evaluateBoolEnvVariable(sfxDebug, false)
+
+	if err != nil {
+		log.WithFields(log.Fields{
+			"error":     err,
+			"SFX_DEBUG": sfxDebug,
+		}).Error("This environment variable supports only boolean values")
+	}
+
+	if isDebug {
+		log.SetLevel(log.DebugLevel)
+		logLevel = "debug"
+	}
+
+	log.Infof("Using log level %s", logLevel)
+
 	return listnr, nil
 }
 
@@ -140,7 +143,7 @@ func (listnr *listener) setupDatapointCollector() {
 		"reporting interval": intervalSeconds,
 	}).Info("Setting up datapoint collector")
 
-	listnr.collectDatapointsOnInterval(time.NewTicker(time.Duration(intervalSeconds) * time.Second), context.Background())
+	listnr.collectDatapointsOnInterval(time.NewTicker(time.Duration(intervalSeconds)*time.Second), context.Background())
 }
 
 func main() {
