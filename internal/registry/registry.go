@@ -1,4 +1,4 @@
-package main
+package registry
 
 import (
 	"container/list"
@@ -11,21 +11,22 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type metricId string
+type metricID string
 
 // Keeps track of all the metrics that have been reporting
-type metricRegistry struct {
+type MetricRegistry struct {
 	sync.RWMutex
 
-	cumulativeCounters map[metricId]*cumulativeCollector
-	gauges             map[metricId]*gaugeCollector
+	cumulativeCounters map[metricID]*CumulativeCollector
+	gauges             map[metricID]*GaugeCollector
+	counters           map[metricID]*CounterCollector
 
 	// A linked list that we keep sorted by access time so that we can very
 	// quickly tell which collectors are expired and should be deleted.
 	lastAccessList list.List
 	// A map optimizing lookup of the access time elements that are used in the
 	// above linked list.
-	lastAccesses map[metricId]*list.Element
+	lastAccesses map[metricID]*list.Element
 
 	expiryTimeout time.Duration
 
@@ -34,7 +35,9 @@ type metricRegistry struct {
 	currentTime func() time.Time
 }
 
-func (mr *metricRegistry) Datapoints() []*datapoint.Datapoint {
+func (mr *MetricRegistry) Datapoints() []*datapoint.Datapoint {
+	mr.purgeOldCollectors()
+
 	mr.RLock()
 
 	var out []*datapoint.Datapoint
@@ -47,48 +50,85 @@ func (mr *metricRegistry) Datapoints() []*datapoint.Datapoint {
 		out = append(out, mr.cumulativeCounters[id].Datapoints()...)
 	}
 
-	mr.RUnlock()
+	for id := range mr.counters {
+		out = append(out, mr.counters[id].Datapoints()...)
+	}
 
-	mr.purgeOldCollectors()
+	mr.RUnlock()
 
 	return out
 }
 
-type metricVal struct {
+func (mr *MetricRegistry) InternalMetrics() []*datapoint.Datapoint {
+	mr.RLock()
+	defer mr.RUnlock()
+
+	return []*datapoint.Datapoint{
+		sfxclient.Gauge("sfx_heroku.tracked_metrics", map[string]string{"type": "cumulative_counter"}, int64(len(mr.cumulativeCounters))),
+		sfxclient.Gauge("sfx_heroku.tracked_metrics", map[string]string{"type": "gauge"}, int64(len(mr.gauges))),
+		sfxclient.Gauge("sfx_heroku.tracked_metrics", map[string]string{"type": "counter"}, int64(len(mr.counters))),
+	}
+}
+
+type MetricVal struct {
 	Name  string
 	Type  datapoint.MetricType
 	Value float64
 }
 
-var _ sfxclient.Collector = &metricRegistry{}
+var _ sfxclient.Collector = &MetricRegistry{}
 
-func newRegistry(expiryTimeout time.Duration) *metricRegistry {
-	return &metricRegistry{
-		cumulativeCounters: map[metricId]*cumulativeCollector{},
-		gauges:             map[metricId]*gaugeCollector{},
-		lastAccesses:       make(map[metricId]*list.Element),
+func New(expiryTimeout time.Duration) *MetricRegistry {
+	return &MetricRegistry{
+		cumulativeCounters: map[metricID]*CumulativeCollector{},
+		gauges:             map[metricID]*GaugeCollector{},
+		counters:           map[metricID]*CounterCollector{},
+		lastAccesses:       make(map[metricID]*list.Element),
 		expiryTimeout:      expiryTimeout,
 		currentTime:        time.Now,
 	}
 }
 
-func (mr *metricRegistry) updateMetrics(mvs []*metricVal, dims map[string]string) {
+func (mr *MetricRegistry) UpdateMetrics(mvs []*MetricVal, dims map[string]string) {
 	for _, mv := range mvs {
-		mr.updateMetric(mv, dims)
+		mr.UpdateMetric(mv, dims)
 	}
 }
 
-func (mr *metricRegistry) updateMetric(mv *metricVal, dims map[string]string) {
+func (mr *MetricRegistry) UpdateMetric(mv *MetricVal, dims map[string]string) {
+	mr.Lock()
+	defer mr.Unlock()
+
+	id := idForMetric(mv.Name, dims)
+
 	switch mv.Type {
 	case datapoint.Gauge:
-		g := mr.registerOrGetGauge(mv.Name, dims, mv.Type)
-		g.Latest(mv.Value)
+		if c := mr.gauges[id]; c == nil {
+			mr.gauges[id] = &GaugeCollector{
+				MetricName: mv.Name,
+				Dimensions: dims,
+			}
+		}
+
+		mr.gauges[id].Set(mv.Value)
 	case datapoint.Count:
-		g := mr.registerOrGetGauge(mv.Name, dims, mv.Type)
-		g.Latest(mv.Value)
+		if c := mr.counters[id]; c == nil {
+			mr.counters[id] = &CounterCollector{
+				MetricName: mv.Name,
+				Dimensions: dims,
+			}
+		}
+
+		mr.counters[id].Add(mv.Value)
 	case datapoint.Counter:
-		cu := mr.registerOrGetCumulative(mv.Name, dims)
-		cu.Add(mv.Value)
+		if c := mr.cumulativeCounters[id]; c == nil {
+			mr.cumulativeCounters[id] = &CumulativeCollector{
+				MetricName: mv.Name,
+				Dimensions: dims,
+			}
+		}
+
+		mr.cumulativeCounters[id].Add(mv.Value)
 	default:
 		log.WithFields(log.Fields{
 			"metric": mv.Name,
@@ -96,49 +136,17 @@ func (mr *metricRegistry) updateMetric(mv *metricVal, dims map[string]string) {
 		}).Warn("Unsupported metric type")
 	}
 
-}
-
-func (mr *metricRegistry) registerOrGetCumulative(name string, dims map[string]string) *cumulativeCollector {
-	mr.Lock()
-	defer mr.Unlock()
-
-	id := idForMetric(name, dims)
-	if c := mr.cumulativeCounters[id]; c == nil {
-		mr.cumulativeCounters[id] = &cumulativeCollector{
-			MetricName: name,
-			Dimensions: dims,
-		}
-	}
-
 	mr.markUsed(id)
-	return mr.cumulativeCounters[id]
 }
 
-func (mr *metricRegistry) registerOrGetGauge(name string, dims map[string]string, metricType datapoint.MetricType) *gaugeCollector {
-	mr.Lock()
-	defer mr.Unlock()
-
-	id := idForMetric(name, dims)
-	if c := mr.gauges[id]; c == nil {
-		mr.gauges[id] = &gaugeCollector{
-			MetricName: name,
-			Dimensions: dims,
-			Type:       metricType,
-		}
-	}
-
-	mr.markUsed(id)
-	return mr.gauges[id]
-}
-
-func idForMetric(name string, dims map[string]string) metricId {
+func idForMetric(name string, dims map[string]string) metricID {
 	id := name + "|"
 
 	for _, key := range sortKeys(dims) {
 		id += key + ":" + dims[key] + "|"
 	}
 
-	return metricId(id)
+	return metricID(id)
 }
 
 func sortKeys(m map[string]string) []string {
@@ -150,19 +158,20 @@ func sortKeys(m map[string]string) []string {
 	if keys != nil {
 		keys.Sort()
 	}
+
 	return []string(keys)
 }
 
 type access struct {
 	ts time.Time
-	id metricId
+	id metricID
 }
 
 // markUsed should be called to indicate that a metricID has been accessed and
 // is still in use.  This causes it to move to the front of the lastAccessList
 // list with an updated access timestamp.
 // The registry lock should be held when calling this method.
-func (mr *metricRegistry) markUsed(id metricId) {
+func (mr *MetricRegistry) markUsed(id metricID) {
 	// If this id is new, just push it to the front of the list and put it in
 	// our map for quick lookup.
 	if _, ok := mr.lastAccesses[id]; !ok {
@@ -170,7 +179,9 @@ func (mr *metricRegistry) markUsed(id metricId) {
 			ts: mr.currentTime(),
 			id: id,
 		})
+
 		mr.lastAccesses[id] = elm
+
 		return
 	}
 	// Otherwise, get the element from the map and scoot it up to the front of
@@ -180,7 +191,7 @@ func (mr *metricRegistry) markUsed(id metricId) {
 	mr.lastAccessList.MoveToFront(elm)
 }
 
-func (mr *metricRegistry) purgeOldCollectors() {
+func (mr *MetricRegistry) purgeOldCollectors() {
 	mr.Lock()
 	defer mr.Unlock()
 
@@ -205,6 +216,7 @@ func (mr *metricRegistry) purgeOldCollectors() {
 
 		delete(mr.cumulativeCounters, acc.id)
 		delete(mr.gauges, acc.id)
+		delete(mr.counters, acc.id)
 		delete(mr.lastAccesses, acc.id)
 	}
 }

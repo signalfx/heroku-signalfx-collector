@@ -1,9 +1,7 @@
-package main
+package internal
 
 import (
-	"bufio"
 	"fmt"
-	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -13,6 +11,7 @@ import (
 	"github.com/docker/go-units"
 	"github.com/mitchellh/mapstructure"
 	"github.com/signalfx/golib/v3/datapoint"
+	"github.com/signalfx/heroku-signalfx-collector/internal/registry"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -27,13 +26,13 @@ type logLine struct {
 	Timestamp string `json:"timestamp"`
 	Hostname  string `json:"hostname"`
 	Appname   string `json:"appname"`
-	ProcId    string `json:"procid"`
+	ProcID    string `json:"procid"`
 	Message   string `json:"message"`
 }
 
 // Format based on docs here,
 // https://devcenter.heroku.com/articles/platform-api-reference#custom-types
-var herokuObjectIdFormat = regexp.MustCompile(`^[0-9a-fA-F]{8}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{12}$`)
+var herokuObjectIDFormat = regexp.MustCompile(`^[0-9a-fA-F]{8}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{12}$`)
 
 // These fields are based on Heroku docs. For more information, see here:
 // https://devcenter.heroku.com/articles/http-routing#heroku-router-log-format
@@ -52,38 +51,6 @@ var refinedRouterMetricNames = map[string]string{
 	"connect": "heroku.router_request_connect_time_millis",
 	"service": "heroku.router_request_service_time_millis",
 	"bytes":   "heroku.router_response_bytes",
-}
-
-func (listnr *listener) processLogs(w http.ResponseWriter, req *http.Request) {
-	dims, err := getDimensionParisFromParams(req.URL.Query())
-
-	if err != nil {
-		log.WithFields(log.Fields{
-			"error":  err,
-			"params": req.URL.Query().Encode(),
-		}).Error("Unable to get App name from request param (appname)")
-		return
-	}
-
-	scanner := bufio.NewScanner(req.Body)
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		processedLog, err := detectAndParseLog(line)
-
-		if err != nil {
-			log.WithFields(log.Fields{
-				"error": err,
-				"line":  line,
-			}).Error("Error processing supported log line")
-			continue
-		}
-
-		if processedLog != nil {
-			metrics, dims := processMetrics(processedLog, dims)
-			listnr.registry.updateMetrics(metrics, dims)
-		}
-	}
 }
 
 func getDimensionParisFromParams(values url.Values) (map[string]string, error) {
@@ -135,12 +102,12 @@ func detectAndParseLog(line string) (*logLine, error) {
 // message has information about dimensions and metrics, always in the
 // following form and this is the only part of the message that's processed
 // "key1=value1 key2=value2 key3=value3 sample#metric_name=metric_value"
-func processMetrics(ll *logLine, dimsFromParmas map[string]string) ([]*metricVal, map[string]string) {
+func processMetrics(ll *logLine, dimsFromParmas map[string]string) ([]*registry.MetricVal, map[string]string) {
 	// To match dyno numbers from dyno names. Dyno names the following format
 	// "web.45", "run.9123", "worker.2" where the prefix denotes the type of process
 	// the dyno is initialized with. Ror more information, see:
 	// https://devcenter.heroku.com/articles/process-model#process-types-vs-dynos
-	processType := strings.Split(ll.ProcId, ".")[0]
+	processType := strings.Split(ll.ProcID, ".")[0]
 
 	metrics, dims := ll.evaluateKeyValuePairs()
 
@@ -150,22 +117,23 @@ func processMetrics(ll *logLine, dimsFromParmas map[string]string) ([]*metricVal
 
 	switch processType {
 	case "router":
-		metrics, dims = fixUpRouterMetricDims(metrics, dims)
+		metrics, dims = fixUpRouterMetrics(metrics, dims)
 	default:
-		metrics, dims = fixUpRouterDynoMetricDims(metrics, dims, processType)
+		metrics, dims = fixUpDynoMetrics(metrics, dims, processType)
 	}
 
 	return metrics, dims
 }
 
 // Cleanup router metric names
-func fixUpRouterMetricDims(metrics []*metricVal,
-	dims map[string]string) ([]*metricVal, map[string]string) {
+func fixUpRouterMetrics(metrics []*registry.MetricVal, dims map[string]string) ([]*registry.MetricVal, map[string]string) {
 	for i := range metrics {
 		if refinedRouterMetricNames[metrics[i].Name] != "" {
 			metrics[i].Name = refinedRouterMetricNames[metrics[i].Name]
+			metrics[i].Type = datapoint.Counter
 		}
 	}
+
 	return metrics, dims
 }
 
@@ -175,15 +143,13 @@ func fixUpRouterMetricDims(metrics []*metricVal,
 // existing "dyno" field collected. (3) add "dyno" dimension with the same
 // value as source. This will make it easy to filter both router and dyno
 // metrics by a single dimension
-func fixUpRouterDynoMetricDims(metrics []*metricVal, dims map[string]string,
-	processType string) ([]*metricVal, map[string]string) {
+func fixUpDynoMetrics(metrics []*registry.MetricVal, dims map[string]string, processType string) ([]*registry.MetricVal, map[string]string) {
 	dims["process_type"] = processType
 	if dims["dyno"] != "" {
 		// expects values of this form: "heroku.155370883.259625dd-a9c7-4987-9c86-08de28dd4f72"
-
 		parsedValue := strings.Split(dims["dyno"], ".")
 		if len(parsedValue) == 3 {
-			match := herokuObjectIdFormat.FindAllString(parsedValue[2], 1)
+			match := herokuObjectIDFormat.FindAllString(parsedValue[2], 1)
 			if len(match) == 1 {
 				dims["dyno_id"] = match[0]
 			}
@@ -203,9 +169,9 @@ func fixUpRouterDynoMetricDims(metrics []*metricVal, dims map[string]string,
 
 // Gets metrics and dimensions from the message field on a log line. Note that this
 // method adds "source" dimensions by default on all  metrics
-func (ll *logLine) evaluateKeyValuePairs() ([]*metricVal, map[string]string) {
-	metrics := make([]*metricVal, 0)
-	dims := map[string]string{"source": ll.ProcId}
+func (ll *logLine) evaluateKeyValuePairs() ([]*registry.MetricVal, map[string]string) {
+	metrics := make([]*registry.MetricVal, 0)
+	dims := map[string]string{"source": ll.ProcID}
 
 	for _, pair := range strings.Split(ll.Message, " ") {
 		splitPair := strings.Split(pair, "=")
@@ -227,10 +193,12 @@ func (ll *logLine) evaluateKeyValuePairs() ([]*metricVal, map[string]string) {
 					"debug":          err,
 					"key-value pair": pair,
 				}).Debug("Error making metricVal from key/value pair in log message. Will be dropped.")
+
 				continue
 			}
 
-			metrics = append(metrics, []*metricVal{metric}...)
+			metrics = append(metrics, []*registry.MetricVal{metric}...)
+
 			continue
 		}
 
@@ -248,7 +216,7 @@ func (ll *logLine) evaluateKeyValuePairs() ([]*metricVal, map[string]string) {
 // Evaluates metrics in the message of a log line. This method assumes the
 // input will always be of the following form ["sample#metric_name", "metric_value"]
 // where "metric_value" may or may not include units
-func evaluateMetric(splitPair []string) (*metricVal, error) {
+func evaluateMetric(splitPair []string) (*registry.MetricVal, error) {
 	val, err := getNumericValue(splitPair[1])
 
 	if err != nil {
@@ -288,19 +256,15 @@ func getNumericValue(value string) (*float64, error) {
 	}
 
 	*out = numericValue
-	return out, nil
 
+	return out, nil
 }
 
 // Returns metricVal name, removing the datapoint type identifiers
-func getMetric(rawMetricName string, metricValue float64) (*metricVal, error) {
-	metricName, metricType, err := processRawMetricKey(rawMetricName)
+func getMetric(rawMetricName string, metricValue float64) (*registry.MetricVal, error) {
+	metricName, metricType := processRawMetricKey(rawMetricName)
 
-	if err != nil {
-		return nil, err
-	}
-
-	return &metricVal{
+	return &registry.MetricVal{
 		Name:  metricName,
 		Value: metricValue,
 		Type:  metricType,
@@ -308,23 +272,23 @@ func getMetric(rawMetricName string, metricValue float64) (*metricVal, error) {
 }
 
 // Returns a processed metricVal name if it's from a supported metricVal type
-func processRawMetricKey(rawMetricName string) (string, datapoint.MetricType, error) {
+func processRawMetricKey(rawMetricName string) (string, datapoint.MetricType) {
 	if isCounter(rawMetricName) {
-		return strings.Replace(rawMetricName, "counter#", "", 1), datapoint.Count, nil
+		return strings.Replace(rawMetricName, "counter#", "", 1), datapoint.Count
 	}
 
 	if isCumulative(rawMetricName) {
-		return strings.Replace(rawMetricName, "cumulative#", "", 1), datapoint.Counter, nil
+		return strings.Replace(rawMetricName, "cumulative#", "", 1), datapoint.Counter
 	}
 
 	// Standard Heroku metrics log run-time metrics identified as samples in the log message.
 	// Remove the sample# prefix from such metric names, and also add a "heroku" prefix to
 	// make metrics easily searchable
 	if isSample(rawMetricName) {
-		return strings.Replace(rawMetricName, "sample#", "heroku.", 1), datapoint.Gauge, nil
+		return strings.Replace(rawMetricName, "sample#", "heroku.", 1), datapoint.Gauge
 	}
 
 	// Other default metrics are categorized as gauges. This includes fields in the
 	// router log message stored in routerMetricKeys.
-	return strings.Replace(rawMetricName, "gauge#", "", 1), datapoint.Gauge, nil
+	return strings.Replace(rawMetricName, "gauge#", "", 1), datapoint.Gauge
 }

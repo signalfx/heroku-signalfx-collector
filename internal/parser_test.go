@@ -1,11 +1,15 @@
-package main
+package internal
 
 import (
 	"net/url"
 	"reflect"
 	"testing"
+
+	"github.com/signalfx/golib/v3/datapoint"
+	"github.com/stretchr/testify/require"
 )
 
+//nolint:funlen
 func TestProcessLogs(t *testing.T) {
 	validInputs := []string{
 		// router error log
@@ -15,7 +19,7 @@ func TestProcessLogs(t *testing.T) {
 		// dyno metricVal logs
 		"277 <45>1 2019-12-11T22:29:21.372436+00:00 host heroku web.1 - source=web.1 dyno=heroku.155370883.259625dd-a9c7-4987-9c86-08de28dd4f72 sample#memory_total=99.74MB sample#memory_rss=97.91MB sample#memory_cache=1.83MB sample#memory_swap=0.00MB sample#memory_pgpgin=355603pages sample#memory_pgpgout=333646pages sample#memory_quota=512.00MB",
 		"277 <45>1 2019-12-11T22:29:21.372436+00:00 host heroku web.2 - source=web.2 dyno=heroku.155370883.e764d0ed-b239-4048-9caa-38a78dfeb6d0 sample#load_avg_1m=0.00",
-		"164 <190>1 2019-12-21T22:21:26.705132+00:00 host app web.1 - gauge#quota_used=20 cumulative#response_bytes=100 sfxdimension#service=backend sfxdimension#client=sfx_app",
+		"164 <190>1 2019-12-21T22:21:26.705132+00:00 host app web.1 - gauge#quota_used=20 counter#changed_bytes=5 cumulative#response_bytes=100 sfxdimension#service=backend sfxdimension#client=sfx_app",
 	}
 
 	expectedParsedLog := []*logLine{
@@ -25,7 +29,7 @@ func TestProcessLogs(t *testing.T) {
 			Timestamp: "2012-10-11T03:47:20+00:00",
 			Hostname:  "host",
 			Appname:   "heroku",
-			ProcId:    "router",
+			ProcID:    "router",
 			Message:   "at=error code=H12 desc=\"Request timeout\" method=GET path=/ host=myapp.herokuapp.com request_id=8601b555-6a83-4c12-8269-97c8e32cdb22 fwd=\"204.204.204.204\" dyno=web.1 connect= service=30000ms status=503 bytes=0 protocol=http",
 		}, {
 			PRI:       "158",
@@ -33,7 +37,7 @@ func TestProcessLogs(t *testing.T) {
 			Timestamp: "2019-12-11T16:17:53.786555+00:00",
 			Hostname:  "host",
 			Appname:   "heroku",
-			ProcId:    "router",
+			ProcID:    "router",
 			Message:   "at=info method=GET path=\"/test\" host=aqueous-oasis-14017.herokuapp.com request_id=93bf8b6c-34b1-4eb8-9b5b-f0e72e5ce377 fwd=\"76.195.93.225\" dyno=web.1 connect=0ms service=1ms status=404 bytes=146 protocol=https",
 		}, {
 			PRI:       "45",
@@ -41,7 +45,7 @@ func TestProcessLogs(t *testing.T) {
 			Timestamp: "2019-12-11T22:29:21.372436+00:00",
 			Hostname:  "host",
 			Appname:   "heroku",
-			ProcId:    "web.1",
+			ProcID:    "web.1",
 			Message:   "source=web.1 dyno=heroku.155370883.259625dd-a9c7-4987-9c86-08de28dd4f72 sample#memory_total=99.74MB sample#memory_rss=97.91MB sample#memory_cache=1.83MB sample#memory_swap=0.00MB sample#memory_pgpgin=355603pages sample#memory_pgpgout=333646pages sample#memory_quota=512.00MB",
 		}, {
 			PRI:       "45",
@@ -49,7 +53,7 @@ func TestProcessLogs(t *testing.T) {
 			Timestamp: "2019-12-11T22:29:21.372436+00:00",
 			Hostname:  "host",
 			Appname:   "heroku",
-			ProcId:    "web.2",
+			ProcID:    "web.2",
 			Message:   "source=web.2 dyno=heroku.155370883.e764d0ed-b239-4048-9caa-38a78dfeb6d0 sample#load_avg_1m=0.00",
 		}, {
 			PRI:       "190",
@@ -57,13 +61,40 @@ func TestProcessLogs(t *testing.T) {
 			Timestamp: "2019-12-21T22:21:26.705132+00:00",
 			Hostname:  "host",
 			Appname:   "app",
-			ProcId:    "web.1",
-			Message:   "gauge#quota_used=20 cumulative#response_bytes=100 sfxdimension#service=backend sfxdimension#client=sfx_app",
+			ProcID:    "web.1",
+			Message:   "gauge#quota_used=20 counter#changed_bytes=5 cumulative#response_bytes=100 sfxdimension#service=backend sfxdimension#client=sfx_app",
 		},
 	}
 
-	numExpectedMetrics := []int{2, 3, 7, 1, 2}
 	numExpectedDimensions := []int{8, 7, 5, 5, 6}
+	expectedTypes := [][]datapoint.MetricType{
+		{
+			datapoint.Counter,
+			datapoint.Counter,
+		},
+		{
+			datapoint.Counter,
+			datapoint.Counter,
+			datapoint.Counter,
+		},
+		{
+			datapoint.Gauge,
+			datapoint.Gauge,
+			datapoint.Gauge,
+			datapoint.Gauge,
+			datapoint.Gauge,
+			datapoint.Gauge,
+			datapoint.Gauge,
+		},
+		{
+			datapoint.Gauge,
+		},
+		{
+			datapoint.Gauge,
+			datapoint.Count,
+			datapoint.Counter,
+		},
+	}
 
 	for i, input := range validInputs {
 		actual, _ := detectAndParseLog(input)
@@ -78,20 +109,23 @@ func TestProcessLogs(t *testing.T) {
 			"app_name": "test-app",
 		})
 
-		if numExpectedMetrics[i] != len(metrics) {
+		if len(expectedTypes[i]) != len(metrics) {
 			t.Logf("Actual: %v", metrics)
-			t.Errorf("Expected %d metrics, received %d metrics", numExpectedMetrics[i], len(metrics))
+			t.Errorf("Expected %d metrics, received %d metrics", len(expectedTypes[i]), len(metrics))
 		}
 
 		if numExpectedDimensions[i] != len(dims) {
 			t.Logf("Actual: %s", dims)
 			t.Errorf("Expected %d dimensions, received %d dimensions", numExpectedDimensions[i], len(dims))
 		}
-	}
 
+		for j := range metrics {
+			require.Equalf(t, expectedTypes[i][j], metrics[j].Type, "expectedTypes[%d][%d] != %d (%v)", i, j, metrics[j].Type, metrics[j])
+		}
+	}
 }
 
-func TestGetDimensionParisFromParams(t *testing.T) {
+func TestGetDimensionPairsFromParams(t *testing.T) {
 	values := url.Values{
 		"dim1": []string{"val1", "val2"},
 		"dim2": []string{"val1"},

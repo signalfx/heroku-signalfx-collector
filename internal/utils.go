@@ -1,4 +1,4 @@
-package main
+package internal
 
 import (
 	"strconv"
@@ -72,14 +72,6 @@ func evaluateBoolEnvVariable(envVal string, defaultVal bool) (bool, error) {
 	}
 
 	return strconv.ParseBool(envVal)
-}
-
-func evaluateIntEnvVariable(envVal string, defaultVal int64) (int64, error) {
-	if envVal == "" {
-		return defaultVal, nil
-	}
-
-	return strconv.ParseInt(envVal, 10, 64)
 }
 
 func makeStringSet(vals ...string) map[string]bool {
