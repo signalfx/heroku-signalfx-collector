@@ -41,6 +41,7 @@ Use the following environment variables to configure the collector
 | `SFX_METRICS_TO_EXCLUDE`         | Comma separated metric names that the collector should not emit                          | `metric_name1,metric_name2,metric_name3` |
 | `SFX_DIMENSION_PAIRS_TO_EXCLUDE` | Comma separated dimension key value pairs that the collector should not emit             | `key1=val1,key2=val2`                    |
 | `SFX_REPORTING_INTERVAL`         | Reporting interval of the collector in seconds. Default value is 10 seconds              | 20                                       |
+| `SFX_INTERNAL_METRICS`           | Whether or not to report internal metrics (set to `true` by default)                     | `false`                                  |
 
 **Configure Heroku App to send logs to SignalFx Collector**
 
@@ -51,6 +52,16 @@ heroku labs:enable log-runtime-metrics
 ```
 
 See [here](https://devcenter.heroku.com/articles/log-runtime-metrics) for more information.
+
+**Configure Heroku App to expose Dyno metadata**
+
+```
+heroku labs:enable runtime-dyno-metadata
+```
+
+This metadata is required by internal metrics to report accurate dimensions for fields like `app_name` and `dyno_id`.
+
+See [here](https://devcenter.heroku.com/articles/dyno-metadata) for more information.
 
 Follow the steps below so that an app sends logs to the collector
 
@@ -98,5 +109,16 @@ Use the following keywords to (identify key-value pairs as metrics or dimensions
 - counter# - `counter` type 
 - cumulative# - `cumulative counter` type 
 - sfxdimension# - `dimension`
+
+### Internal Metrics
+
+The collector reports internal metrics by default. Below is a list of internal metrics.
+
+| Metric Name                       | Description                                                                                                                                               |
+|-----------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `sfx_heroku.total_drain_requests` | Number of drain requests received by the collector                                                                                                        |
+| `sfx_heroku.tracked_metrics`      | Number of metrics collected per metric type. Metric types are determined by the dimension called `type` (i.e., `cumulative_counter`, `counter`, `gauge`). |
+
+**Note**: These metrics are collected by default and can be turned off by setting `SFX_INTERNAL_METRICS` to `false`.
 
 
