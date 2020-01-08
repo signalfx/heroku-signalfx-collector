@@ -88,7 +88,7 @@ func (l *Listener) shouldDispatch(datapoint *datapoint.Datapoint) bool {
 func (l *Listener) ProcessLogs(w http.ResponseWriter, req *http.Request) {
 	atomic.AddInt64(&l.totalRequests, 1)
 
-	dims, err := getDimensionParisFromParams(req.URL.Query())
+	dims, err := getDimensionPairsFromParams(req.URL.Query())
 
 	if err != nil {
 		log.WithFields(log.Fields{

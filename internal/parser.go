@@ -53,7 +53,7 @@ var refinedRouterMetricNames = map[string]string{
 	"bytes":   "heroku.router_response_bytes",
 }
 
-func getDimensionParisFromParams(values url.Values) (map[string]string, error) {
+func getDimensionPairsFromParams(values url.Values) (map[string]string, error) {
 	dims := map[string]string{}
 
 	for dimKey, dimValue := range values {
