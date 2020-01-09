@@ -7,6 +7,8 @@ collects the following metrics -
 - Heroku Dyno metrics
 - Custom metrics
 
+**Note**: Application and Heroku Dyno metrics will be prefixed by `heroku.` in SignalFx.
+
 ## Setup
 
 At a high level, the collector runs as a HTTPS Log Drain app on Heroku. See [here](https://devcenter.heroku.com/articles/log-drains#https-drains) for more information.
