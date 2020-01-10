@@ -76,6 +76,16 @@ app and `APP_NAME` to be the Heroku app to monitored. Use `heroku apps:info | gr
 to set the app name. Passing in the `app_name` parameter is **required**. `app_name` is added as
 dimension to datapoints being by the collector.
 
+To add custom dimensions to all datapoints being emitted by the collector, pass in query parameters while configuring
+the log drain.
+
+```
+heroku drains:add "https://<SFX_COLLECTOR_APP_NAME>.herokuapp.com?app_name=<APP_NAME>&dim1=key1&dim2=key2"
+```
+
+For example, configuring a log drain in the manner above will add `dim1=key1` and `dim2=key2` dimensions to all
+datapoints being emitted by the collector.
+
 **Deploy the collector to Heroku**
 
 ```
