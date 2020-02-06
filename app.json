@@ -1,0 +1,49 @@
+{
+	"name": "SignalFx Heroku Collector",
+	"description": "A Heroku Log Drain app that metricizes logs and dispatches them to SignalFx",
+  "keywords": [
+    "signalfx",
+    "splunk",
+    "metrics",
+    "observability"
+  ],
+  "website": "https://signalfx.com/",
+  "repository": "https://github.com/signalfx/heroku-signalfx-collector",
+	"env": {
+		"SFX_TOKEN": {
+			"description": "SignalFx access token of the org to which data needs to be sent",
+      "required": true
+		},
+		"SFX_INGEST_URL": {
+			"description": "Ingest URL to which data needs to be sent",
+      "required": true
+		},
+		"SFX_REALM": {
+			"description": "SignalFx realm to which data is to be sent",
+      "required": false
+		},
+		"SFX_METRICS_TO_EXCLUDE": {
+			"description": "Comma separated metric names that the collector should not emit",
+      "required": false
+		},
+		"SFX_DIMENSION_PAIRS_TO_EXCLUDE": {
+			"description": "Comma separated dimension key value pairs that the collector should not emit",
+      "required": false
+		},
+		"SFX_REPORTING_INTERVAL": {
+			"description": "Reporting interval of the collector in seconds. Default value is 10 seconds",
+      "value": "10",
+      "required": false
+		},
+		"SFX_INTERNAL_METRICS": {
+			"description": "Whether or not to report internal metrics (set to true by default)",
+      "value": "true",
+      "required": false
+		}
+	},
+  "buildpacks": [
+    {
+      "url": "heroku/go"
+    }
+  ]
+}
