@@ -7,6 +7,6 @@ require (
 	github.com/mitchellh/mapstructure v1.4.1
 	github.com/signalfx/golib/v3 v3.1.0
 	github.com/signalfx/signalfx-go v1.6.11
-	github.com/sirupsen/logrus v1.4.2
+	github.com/sirupsen/logrus v1.8.1
 	github.com/stretchr/testify v1.7.0
 )
