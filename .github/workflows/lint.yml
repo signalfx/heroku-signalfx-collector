@@ -1,0 +1,42 @@
+name: Lint
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+    branches:
+      - main
+  pull_request:
+
+env:
+  GO_VERSION: "1.13"
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the codebase
+        uses: actions/checkout@v2
+
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Caching dependency
+        uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/go/bin
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+
+      - name: Install golangci-lint
+        run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.21.0
+
+      - name: Build
+        run: go build .
+
+      - name: Lint
+        run: golangci-lint run
