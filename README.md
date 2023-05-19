@@ -1,3 +1,5 @@
+:warning: **SignalFx Smart Agent is deprecated. For details, see the [Deprecation Notice](https://github.com/signalfx/signalfx-agent/blob/main/docs/smartagent-deprecation-notice.md)** :warning:
+
 # Heroku SignalFx Collector
 
 A Golang Heroku app that collects metrics from apps and reports them to SignalFx. The Heroku SignalFx Collector
