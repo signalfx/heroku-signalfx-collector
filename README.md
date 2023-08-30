@@ -1,4 +1,7 @@
-:warning: **SignalFx Smart Agent is deprecated. For details, see the [Deprecation Notice](https://github.com/signalfx/signalfx-agent/blob/main/docs/smartagent-deprecation-notice.md)** :warning:
+> # :warning: End of Support (EoS) Notice
+> **The Heroku SignalFx Collector and SignalFx Smart Agent have reached End of Support.**
+>
+> The [Splunk Distribution of OpenTelemetry Collector for Heroku](https://docs.splunk.com/observability/gdi/monitors-cloud/heroku.html#heroku) is the successor. 
 
 # Heroku SignalFx Collector
 
